@@ -1,0 +1,17 @@
+# 自动写小说 Agent 配置文件
+# 复制为 config.local.yaml 并填入你的 API Key（该文件不会被 git 追踪）
+
+llm:
+  provider: anthropic          # anthropic / openai / openai-compatible
+  model: claude-opus-4-7       # 写作推荐 Opus；快速测试可用 claude-sonnet-4-6
+  api_key: ""                  # 从环境变量或此处读取
+  base_url: ""                 # OpenAI 兼容接口时填写
+  max_tokens: 8192
+  temperature: 0.8             # 创意写作建议 0.7-0.9
+
+data:
+  root: ./data                 # 项目数据根目录（即 Obsidian Vault 根目录）
+
+chroma:
+  persist_dir: .chroma         # 向量数据库持久化路径（相对于项目目录）
+  embedding_model: all-MiniLM-L6-v2
