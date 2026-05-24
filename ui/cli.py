@@ -20,8 +20,21 @@ from engine.reviewer import review_chapter
 from engine.archive_updater import update_archives
 from engine.tts import read_chapter, VOICES, VOICE_ALIASES
 
+__version__ = "0.2.0"
+
 app = typer.Typer(help="novel-agent - AI driven novel writing assistant")
-console = Console(force_terminal=False)
+console = Console(force_terminal=True)
+
+
+def _version_callback(value: bool):
+    if value:
+        console.print(f"novel-agent v{__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(version: bool = typer.Option(False, "--version", "-V", callback=_version_callback, help="Show version")):
+    pass
 
 project_cmd = typer.Typer(help="Project management")
 character_cmd = typer.Typer(help="Character profile management")
@@ -34,11 +47,25 @@ app.add_typer(tts_cmd, name="tts")
 
 
 def _load_config() -> dict:
-    for name in ["config.local.yaml", "config.yaml"]:
-        if Path(name).exists():
-            with open(name, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
-    return {}
+    """加载配置：先读 config.yaml，再用 config.local.yaml 覆盖"""
+    config = {}
+    for name in ["config.yaml", "config.local.yaml"]:
+        path = Path(name)
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                overrides = yaml.safe_load(f) or {}
+                _deep_merge(config, overrides)
+    return config
+
+
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    """递归合并配置字典"""
+    for key, value in overrides.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
 def _get_client() -> LLMClient:
@@ -246,7 +273,10 @@ def create(project: str, num: int, title: str = ""):
 
 
 @chapter_cmd.command()
-def write(project: str, num: int, stream: bool = True):
+def write(project: str, num: int,
+          stream: bool = typer.Option(True, help="流式输出生成过程"),
+          review: bool = typer.Option(True, help="生成后进行 AI 审校"),
+          archive: bool = typer.Option(True, help="从新章节自动更新人物档案")):
     """Generate chapter content using AI"""
     project_dir = _get_data_root() / project
     if not project_dir.exists():
@@ -263,20 +293,37 @@ def write(project: str, num: int, stream: bool = True):
     context = build_chapter_context(project_dir, num, cm, wm, chm)
     console.print(f"  Context length: {len(context)} chars")
 
-    chapter_text = write_chapter(client, context, stream=stream)
+    if stream:
+        console.print("\n--- 开始生成 ---\n")
+        def on_chunk(chunk: str):
+            console.print(chunk, end="", highlight=False)
+        chapter_text = write_chapter(client, context, stream=True, on_chunk=on_chunk)
+        console.print("\n--- 生成完毕 ---\n")
+    else:
+        chapter_text = write_chapter(client, context, stream=False)
 
     if not chapter_text.strip():
         console.print("[red]Generation failed: empty output[/red]")
         raise typer.Exit(1)
 
-    review_chapter(client, chapter_text, context)
+    if review:
+        console.print("\n--- 审校中 ---\n")
+        review_report = review_chapter(client, chapter_text, context)
+        console.print(review_report)
+        console.print("\n--- 审校完毕 ---\n")
 
     chapter_data = chm.get(num)
-    char_names = chapter_data.get("characters", [])
-    update_archives(client, chapter_text, num, char_names, cm)
+
+    if archive:
+        char_names = chapter_data.get("characters", [])
+        console.print("\n--- 更新人物档案 ---")
+        results = update_archives(client, chapter_text, num, char_names, cm)
+        for r in results:
+            console.print(f"  [green]✓[/green] {r['name']} 档案已更新")
 
     chm.save(num, chapter_data.get("title", f"Chapter {num}"), chapter_text,
-             characters=char_names, pov=chapter_data.get("pov", ""))
+             characters=chapter_data.get("characters", []),
+             pov=chapter_data.get("pov", ""))
 
     console.print(f"[green][OK] Chapter {num} saved[/green]")
     console.print(f"  Words: {len(chapter_text)}")

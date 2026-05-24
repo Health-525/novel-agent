@@ -96,13 +96,25 @@ def _format_worldview(worldview: dict) -> str:
 def _format_character_profile(data: dict, is_linked: bool = False) -> str:
     """将人物 frontmatter 格式化为 LLM 友好的文本"""
     prefix = "### [关联人物]" if is_linked else "### [出场人物]"
-    lines = [f"{prefix} {data.get('name', '')}"]
+    name = data.get("name", "") or ""
+    lines = [f"{prefix} {name}"]
 
-    if data.get("aliases"):
-        lines.append(f"别名: {', '.join(data['aliases'])}")
-    lines.append(f"年龄: {data.get('age')} | 性别: {data.get('gender')}")
-    lines.append(f"身份: {data.get('identity')}")
-    lines.append(f"外貌: {data.get('appearance')}")
+    aliases = data.get("aliases")
+    if aliases:
+        lines.append(f"别名: {', '.join(aliases)}")
+
+    age = data.get("age")
+    gender = data.get("gender")
+    if age or gender:
+        lines.append(f"年龄: {age or '?'} | 性别: {gender or '?'}")
+
+    identity = data.get("identity")
+    if identity:
+        lines.append(f"身份: {identity}")
+
+    appearance = data.get("appearance")
+    if appearance:
+        lines.append(f"外貌: {appearance}")
 
     personality = data.get("personality", {})
     if isinstance(personality, dict):

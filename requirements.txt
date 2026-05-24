@@ -1,8 +1,10 @@
 pyyaml>=6.0
 python-frontmatter>=1.1
-chromadb>=0.5
 anthropic>=0.40
 openai>=1.50
 rich>=13.0
 typer>=0.12
 edge-tts>=6.1
+# 可选：向量语义搜索（需要 onnxruntime 或 PyTorch）
+# chromadb>=0.5
+pytest>=8.0

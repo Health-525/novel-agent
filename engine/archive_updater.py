@@ -2,10 +2,13 @@
 
 import json
 import re
+import logging
 from pathlib import Path
 from llm.client import LLMClient
 from llm.prompts import ARCHIVE_UPDATER_SYSTEM
 from knowledge.character import CharacterManager
+
+logger = logging.getLogger(__name__)
 
 
 def update_archives(
@@ -42,7 +45,7 @@ def update_archives(
 
 {profiles}"""
 
-    print("\n--- 更新人物档案 ---\n")
+    logger.info("Updating character archives...")
     result = client.chat(system=ARCHIVE_UPDATER_SYSTEM, user=prompt)
 
     # 解析 LLM 返回的 JSON
@@ -50,8 +53,8 @@ def update_archives(
         json_text = _extract_json(result)
         updates = json.loads(json_text)
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"  ⚠ JSON 解析失败: {e}")
-        print(f"  原始输出: {result[:500]}")
+        logger.warning("JSON parse failed: %s", e)
+        logger.debug("Raw output: %s", result[:500])
         return []
 
     # 写回每个人物的档案
@@ -63,7 +66,7 @@ def update_archives(
 
         current = character_manager.get(name)
         if not current:
-            print(f"  ⚠ 人物 '{name}' 不在档案中，跳过")
+            logger.warning("Character '%s' not in archive, skipping", name)
             continue
 
         # 追加新的 timeline 条目
@@ -77,9 +80,10 @@ def update_archives(
         for rel_update in char_update.get("relationship_updates", []):
             target = rel_update.get("target", "")
             new_state = rel_update.get("new_state", "")
+            target_clean = target.replace("[[", "").replace("]]", "").split("|")[0].strip()
             for r in relationships:
-                r_target = r.get("target", "")
-                if target in r_target or r_target in target:
+                r_target_clean = r.get("target", "").replace("[[", "").replace("]]", "").split("|")[0].strip()
+                if r_target_clean == target_clean:
                     r["state"] = new_state
                     if rel_update.get("reason"):
                         r["history"] = r.get("history", "") + f" → 第{chapter_num}章{rel_update['reason']}"
@@ -98,9 +102,8 @@ def update_archives(
 
         character_manager.update(name, updates_dict)
         results.append({"name": name, "status": "updated", "changes": char_update})
-        print(f"  ✓ {name} 档案已更新")
+        logger.info("✓ %s archive updated", name)
 
-    print()
     return results
 
 
@@ -109,7 +112,16 @@ def _extract_json(text: str) -> str:
     json_match = re.search(r"```json\s*([\s\S]*?)\s*```", text)
     if json_match:
         return json_match.group(1)
-    brace_match = re.search(r"\{[\s\S]*\}", text)
-    if brace_match:
-        return brace_match.group(0)
+    # 找到第一个完整的 JSON 对象（非贪婪匹配第一个 { 和对应的 }）
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{" and depth == 0:
+            start = i
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return text[start:i + 1]
     return text

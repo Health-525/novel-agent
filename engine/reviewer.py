@@ -1,7 +1,10 @@
 """审校器 — 检查人物一致性和情节矛盾"""
 
+import logging
 from llm.client import LLMClient
 from llm.prompts import REVIEWER_SYSTEM
+
+logger = logging.getLogger(__name__)
 
 
 def review_chapter(client: LLMClient, chapter_text: str, context: str) -> str:
@@ -23,8 +26,7 @@ def review_chapter(client: LLMClient, chapter_text: str, context: str) -> str:
 
 {chapter_text}"""
 
-    print("\n--- 审校中 ---\n")
+    logger.info("Reviewing chapter...")
     report = client.chat(system=REVIEWER_SYSTEM, user=prompt)
-    print(report)
-    print("\n--- 审校完毕 ---\n")
+    logger.info("Review complete (%d chars)", len(report))
     return report

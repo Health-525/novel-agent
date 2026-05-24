@@ -18,12 +18,29 @@ word_count: 0
 （正文待生成）
 """
 
-_NUMBERS = list("一二三四五六七八九十")
+_DIGITS = "零一二三四五六七八九"
+_UNITS = ["", "十", "百", "千", "万"]
 
 
 def _chinese_num(n: int) -> str:
-    if n <= 10:
-        return _NUMBERS[n - 1]
+    """数字转中文，支持1-999"""
+    if n <= 0:
+        return str(n)
+    if n < 10:
+        return _DIGITS[n]
+    if n < 20:
+        return f"十{_DIGITS[n - 10] if n > 10 else ''}"
+    if n < 100:
+        tens = n // 10
+        ones = n % 10
+        return f"{_DIGITS[tens]}十{_DIGITS[ones] if ones else ''}"
+    if n < 1000:
+        hundreds = n // 100
+        rest = n % 100
+        result = f"{_DIGITS[hundreds]}百"
+        if rest:
+            result += _chinese_num(rest)
+        return result
     return str(n)
 
 
@@ -67,9 +84,18 @@ class ChapterManager:
             existing_meta["summary"] = summary
         write_frontmatter(filepath, existing_meta, body)
 
+    def _sorted_chapters(self):
+        """按章节号排序，正确处理 ch2 > ch10 的问题"""
+        import re
+        files = list(self.dir.glob("ch*.md"))
+        def _key(p: Path):
+            m = re.search(r"ch(\d+)", p.stem)
+            return int(m.group(1)) if m else 0
+        return sorted(files, key=_key)
+
     def get_recent_summaries(self, n: int = 3) -> list[dict]:
         """获取最近 n 章的摘要，用于上下文组装"""
-        chapters = sorted(self.dir.glob("ch*.md"))
+        chapters = self._sorted_chapters()
         summaries = []
         for ch in chapters[-n:]:
             metadata, _ = parse_frontmatter(ch)
@@ -83,7 +109,7 @@ class ChapterManager:
 
     def list_all(self) -> list[dict]:
         chapters = []
-        for ch in sorted(self.dir.glob("ch*.md")):
+        for ch in self._sorted_chapters():
             metadata, _ = parse_frontmatter(ch)
             chapters.append({
                 "chapter": metadata.get("chapter"),

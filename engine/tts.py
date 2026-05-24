@@ -1,11 +1,11 @@
 """TTS 语音合成 — 调用 Edge TTS 将章节文本转为 MP3"""
 
 import re
-import subprocess
-import sys
+import asyncio
+import logging
 from pathlib import Path
 
-import yaml
+logger = logging.getLogger(__name__)
 
 # 高质量中文声音，按场景推荐
 VOICES = {
@@ -46,17 +46,11 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     # 去掉引用标记
     text = re.sub(r'^>\s?', '', text, flags=re.MULTILINE)
+    # 去掉 HTML 标签
+    text = re.sub(r'<[^>]+>', '', text)
     # 合并连续空行
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
-
-
-def _ensure_edge_tts() -> None:
-    try:
-        import edge_tts  # noqa: F401
-    except ImportError:
-        print("正在安装 edge-tts ...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "edge-tts"])
 
 
 async def _synthesize(text: str, voice: str, output: Path, rate: str = "+10%") -> None:
@@ -79,8 +73,6 @@ def read_chapter(chapter_path: Path, output_path: Path,
     Returns:
         生成的 mp3 文件路径
     """
-    _ensure_edge_tts()
-
     raw = chapter_path.read_text(encoding="utf-8")
     text = _strip_markdown(raw)
 
@@ -88,8 +80,21 @@ def read_chapter(chapter_path: Path, output_path: Path,
         raise ValueError(f"章节内容为空: {chapter_path}")
 
     voice_name = _resolve_voice(voice)
+    logger.info("Synthesizing %s with voice %s", chapter_path.name, voice_name)
 
-    import asyncio
-    asyncio.run(_synthesize(text, voice_name, output_path, rate))
+    try:
+        asyncio.run(_synthesize(text, voice_name, output_path, rate))
+    except RuntimeError:
+        # 如果已有运行中的事件循环，使用线程池方式
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(_run_async, text, voice_name, output_path, rate)
+            future.result()
 
+    logger.info("Audio saved to %s", output_path)
     return output_path
+
+
+def _run_async(text, voice, output, rate):
+    """在新线程中运行异步合成"""
+    asyncio.run(_synthesize(text, voice, output, rate))
