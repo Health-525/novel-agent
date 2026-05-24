@@ -88,7 +88,8 @@ def _format_worldview(worldview: dict) -> str:
     if worldview.get("timeline"):
         lines.append("### 世界观时间线")
         for t in worldview["timeline"]:
-            lines.append(f"- {t['year']}: {t['event']}")
+            label = t.get("year", t.get("era", ""))
+            lines.append(f"- {label}: {t.get('event', '')}")
     return "\n".join(lines)
 
 
