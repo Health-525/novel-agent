@@ -18,6 +18,7 @@ from engine.context_builder import build_chapter_context
 from engine.writer import write_chapter
 from engine.reviewer import review_chapter
 from engine.archive_updater import update_archives
+from engine.tts import read_chapter, VOICES, VOICE_ALIASES
 
 app = typer.Typer(help="novel-agent - AI driven novel writing assistant")
 console = Console(force_terminal=False)
@@ -27,7 +28,9 @@ character_cmd = typer.Typer(help="Character profile management")
 chapter_cmd = typer.Typer(help="Chapter management")
 app.add_typer(project_cmd, name="project")
 app.add_typer(character_cmd, name="character")
+tts_cmd = typer.Typer(help="Text-to-speech synthesis")
 app.add_typer(chapter_cmd, name="chapter")
+app.add_typer(tts_cmd, name="tts")
 
 
 def _load_config() -> dict:
@@ -297,6 +300,53 @@ def list(project: str):
     for ch in chaps:
         status = "[green]done[/green]" if ch["status"] == "written" else "draft"
         table.add_row(str(ch["chapter"]), ch["title"], status, str(ch["word_count"]))
+    console.print(table)
+
+
+# ------------------------------------------------------------------
+# TTS commands
+# ------------------------------------------------------------------
+
+@tts_cmd.command()
+def read(project: str, num: int,
+         voice: str = typer.Option("xiaoxiao", help="音色: nv(女活泼)/nr(男叙事)/nv2(女温柔)/nr2(男沉稳)"),
+         output: str = typer.Option("", help="输出路径，默认在项目目录下")):
+    """将章节文本转为 MP3 语音"""
+    project_dir = _get_data_root() / project
+    if not project_dir.exists():
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+
+    chapter_path = project_dir / "chapters" / f"ch{num:02d}.md"
+    if not chapter_path.exists():
+        console.print(f"[red]Chapter {num} not found: {chapter_path}[/red]")
+        raise typer.Exit(1)
+
+    if not output:
+        output = str(project_dir / "audiobook" / f"ch{num:02d}.mp3")
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"[bold]Generating audio for Chapter {num}...[/bold]")
+    console.print(f"  Voice: {voice}")
+    console.print(f"  Output: {output_path}")
+
+    read_chapter(chapter_path, output_path, voice=voice)
+
+    console.print(f"[green][OK] Audio generated: {output_path}[/green]")
+
+
+@tts_cmd.command()
+def voices():
+    """列出可用音色"""
+    table = Table(title="Available Voices")
+    table.add_column("Alias")
+    table.add_column("Voice")
+    table.add_column("Description")
+    table.add_row("nv",  VOICES["xiaoxiao"], "女声 · 活泼自然（默认）")
+    table.add_row("nr",  VOICES["yunxi"],    "男声 · 叙事感强")
+    table.add_row("nv2", VOICES["xiaoyi"],    "女声 · 温柔")
     console.print(table)
 
 
