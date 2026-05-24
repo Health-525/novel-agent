@@ -14,10 +14,14 @@ from knowledge.character import CharacterManager
 from knowledge.worldview import WorldviewManager
 from knowledge.chapter import ChapterManager
 from knowledge.vector_store import VectorStore
+from knowledge.obsidian_utils import parse_frontmatter
 from engine.context_builder import build_chapter_context
-from engine.writer import write_chapter
+from engine.writer import write_chapter, rewrite_chapter
 from engine.reviewer import review_chapter
+from engine.summarizer import generate_summary
 from engine.archive_updater import update_archives
+from engine.epub_exporter import export_epub
+from engine.config_validator import validate_config
 from engine.tts import read_chapter, VOICES, VOICE_ALIASES
 
 __version__ = "0.2.0"
@@ -55,6 +59,10 @@ def _load_config() -> dict:
             with open(path, "r", encoding="utf-8") as f:
                 overrides = yaml.safe_load(f) or {}
                 _deep_merge(config, overrides)
+    errors = validate_config(config)
+    if errors:
+        for err in errors:
+            console.print(f"[yellow][WARN][/yellow] {err}")
     return config
 
 
@@ -148,9 +156,31 @@ def info(name: str):
     cm = CharacterManager(project_dir, _get_vector_store(project_dir))
     chm = ChapterManager(project_dir)
 
-    console.print(Panel(f"[bold]{name}[/bold]", title="Project Info"))
-    console.print(f"Characters: {len(cm.list_all())}")
-    console.print(f"Chapters: {len(chm.list_all())}")
+    # 读取项目元数据
+    project_meta, _ = parse_frontmatter(project_dir / "project.md") if (project_dir / "project.md").exists() else ({}, "")
+    target_words = project_meta.get("target_words", 0)
+    genre = project_meta.get("genre", "")
+
+    chaps = chm.list_all()
+    total_words = sum(ch.get("word_count", 0) for ch in chaps)
+    written = sum(1 for ch in chaps if ch.get("status") == "written")
+    draft = len(chaps) - written
+
+    # 进度面板
+    console.print(Panel(f"[bold]{name}[/bold]" + (f"  ·  {genre}" if genre else ""), title="Project Info"))
+    console.print(f"  人物: {len(cm.list_all())}  |  章节: {len(chaps)} ([green]{written} 已完成[/green], [dim]{draft} 草稿[/dim])")
+    console.print(f"  总字数: [bold]{total_words:,}[/bold] 字", end="")
+    if target_words:
+        pct = min(total_words / target_words * 100, 100)
+        console.print(f"  |  目标: {target_words:,} 字  |  进度: {pct:.1f}%")
+        bar_width = 30
+        filled = int(bar_width * total_words / target_words)
+        filled = min(filled, bar_width)
+        bar = "=" * filled + "-" * (bar_width - filled)
+        color = "green" if pct > 10 else "yellow"
+        console.print(f"  [{color}][{bar}] {total_words:,}/{target_words:,}[/{color}]")
+    else:
+        console.print()
 
     chars = cm.list_all()
     if chars:
@@ -162,21 +192,42 @@ def info(name: str):
             table.add_row(str(c["name"]), str(c.get("age", "")), str(c.get("identity", "")))
         console.print(table)
 
-    chaps = chm.list_all()
     if chaps:
         table = Table(title="Chapters")
         table.add_column("Ch")
         table.add_column("Title")
         table.add_column("Status")
         table.add_column("Words")
+        table.add_column("Summary")
         for ch in chaps:
+            status = "[green]written[/green]" if ch.get("status") == "written" else "[dim]draft[/dim]"
+            summary = ch.get("summary", "")
+            if summary:
+                summary = summary[:40] + "..." if len(summary) > 40 else summary
             table.add_row(
                 str(ch["chapter"]),
                 str(ch.get("title", "")),
-                str(ch.get("status", "")),
-                str(ch.get("word_count", 0)),
+                status,
+                f"{ch.get('word_count', 0):,}",
+                summary,
             )
         console.print(table)
+
+
+@project_cmd.command()
+def export(name: str,
+           fmt: str = typer.Option("epub", help="导出格式: epub"),
+           output: str = typer.Option("", help="输出路径，默认在项目目录下")):
+    """Export novel to ebook format"""
+    project_dir = _get_data_root() / name
+    if not project_dir.exists():
+        console.print(f"[red]Project '{name}' not found[/red]")
+        raise typer.Exit(1)
+
+    output_path = output if output else None
+    console.print(f"[bold]Exporting '{name}' to {fmt}...[/bold]")
+    result = export_epub(project_dir, output_path)
+    console.print(f"[green][OK] Exported: {result}[/green]")
 
 
 # ------------------------------------------------------------------
@@ -321,13 +372,76 @@ def write(project: str, num: int,
         for r in results:
             console.print(f"  [green]✓[/green] {r['name']} 档案已更新")
 
+    console.print("\n--- 生成摘要 ---")
+    summary = generate_summary(client, chapter_text, num)
+    console.print(f"  {summary[:80]}...")
+
     chm.save(num, chapter_data.get("title", f"Chapter {num}"), chapter_text,
              characters=chapter_data.get("characters", []),
-             pov=chapter_data.get("pov", ""))
+             pov=chapter_data.get("pov", ""), summary=summary)
 
     console.print(f"[green][OK] Chapter {num} saved[/green]")
     console.print(f"  Words: {len(chapter_text)}")
     console.print(f"  File: {project_dir / 'chapters' / f'ch{num:02d}.md'}")
+
+
+@chapter_cmd.command()
+def rewrite(project: str, num: int,
+            stream: bool = typer.Option(True, help="流式输出重写过程")):
+    """Rewrite chapter based on review feedback"""
+    project_dir = _get_data_root() / project
+    if not project_dir.exists():
+        console.print(f"[red]Project '{project}' not found[/red]")
+        raise typer.Exit(1)
+
+    vs = _get_vector_store(project_dir)
+    cm = CharacterManager(project_dir, vs)
+    wm = WorldviewManager(project_dir)
+    chm = ChapterManager(project_dir)
+    client = _get_client()
+
+    chapter_data = chm.get(num)
+    chapter_text = chapter_data.get("body", "")
+    if not chapter_text.strip():
+        console.print(f"[red]Chapter {num} is empty, run 'write' first[/red]")
+        raise typer.Exit(1)
+
+    # 重建上下文 + 生成审校报告
+    context = build_chapter_context(project_dir, num, cm, wm, chm)
+    console.print(f"[bold]Reviewing Chapter {num}...[/bold]")
+    review_report = review_chapter(client, chapter_text, context)
+    console.print(review_report)
+
+    if "无一致性问题" in review_report:
+        console.print("[green]Chapter is clean, no rewrite needed[/green]")
+        raise typer.Exit(0)
+
+    console.print(f"\n[bold]Rewriting Chapter {num} based on feedback...[/bold]")
+
+    if stream:
+        console.print("\n--- 开始重写 ---\n")
+        def on_chunk(chunk: str):
+            console.print(chunk, end="", highlight=False)
+        new_text = rewrite_chapter(client, chapter_text, review_report, context,
+                                   stream=True, on_chunk=on_chunk)
+        console.print("\n--- 重写完毕 ---\n")
+    else:
+        new_text = rewrite_chapter(client, chapter_text, review_report, context,
+                                   stream=False)
+
+    if not new_text.strip():
+        console.print("[red]Rewrite failed: empty output[/red]")
+        raise typer.Exit(1)
+
+    # 生成新摘要
+    summary = generate_summary(client, new_text, num)
+
+    chm.save(num, chapter_data.get("title", f"Chapter {num}"), new_text,
+             characters=chapter_data.get("characters", []),
+             pov=chapter_data.get("pov", ""), summary=summary)
+
+    console.print(f"[green][OK] Chapter {num} rewritten and saved[/green]")
+    console.print(f"  Words: {len(new_text)}")
 
 
 @chapter_cmd.command()

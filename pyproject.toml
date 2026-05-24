@@ -17,6 +17,7 @@ dependencies = [
     "rich>=13",
     "typer>=0.9",
     "edge-tts>=6.1",
+    "ebooklib>=0.18",
 ]
 
 [project.scripts]

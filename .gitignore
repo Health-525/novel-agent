@@ -3,6 +3,7 @@ __pycache__/
 .env
 config.local.yaml
 data/**/*.mp3
+data/**/*.epub
 data/**/audiobook/
 data/**/.chroma/
 .chroma/

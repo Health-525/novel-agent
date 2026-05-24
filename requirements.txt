@@ -5,6 +5,7 @@ openai>=1.50
 rich>=13.0
 typer>=0.12
 edge-tts>=6.1
+ebooklib>=0.18
 # 可选：向量语义搜索（需要 onnxruntime 或 PyTorch）
 # chromadb>=0.5
 pytest>=8.0
